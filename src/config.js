@@ -41,12 +41,24 @@ module.exports = {
   },
   wa: {
     // Regex untuk menangkap pairing code di console (group 1 = code, 8 char alnum)
+    // Default: harus mengandung digit (skip kata seperti MASUKKAN/PAIRING/NOMOR).
+    // Format yg di-match: XXXX-XXXX atau XXXXXXXX (8 char) yg memuat ≥1 angka.
     pairRegex: process.env.WA_PAIR_REGEX
-      || '(?:pair(?:ing)?\\s*code|kode\\s*pairing)[^A-Z0-9]*([A-Z0-9]{4}[-\\s]?[A-Z0-9]{4})',
+      || '((?:[A-Z0-9]{4}-[A-Z0-9]{4})|(?=[A-Z0-9]*\\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{8})',
     // Regex untuk mendeteksi bot SUKSES konek (boleh sertakan placeholder {number})
     connectedRegex: process.env.WA_CONNECTED_REGEX
       || '(connected|logged\\s*in|tersambung|online|ready|berhasil\\s*login|open)',
     pairTimeoutMs: Number(process.env.WA_PAIR_TIMEOUT_MS || 60000),
     connectTimeoutMs: Number(process.env.WA_CONNECT_TIMEOUT_MS || 120000),
+    // Sequence command yang dikirim untuk minta pairing.
+    // Pisahkan dengan '\n' untuk multi-step (menu bot). {number} otomatis diganti.
+    // Default: kirim "pair <nomor>" lalu (kalau bot menu) "2" lalu "<nomor>" lagi.
+    pairCommand: process.env.WA_PAIR_COMMAND || 'pair {number}',
+    // Prompt dari bot yang minta input nomor. Bila match, otomatis kirim nomor.
+    promptNumberRegex: process.env.WA_PROMPT_NUMBER_REGEX
+      || '(masukkan\\s*nomor|input.*number|enter.*number|nomor\\s*hp|phone\\s*number)',
+    // Prompt menu utama: bila match, otomatis kirim "2" (opsi pairing).
+    promptMenuRegex: process.env.WA_PROMPT_MENU_REGEX
+      || '(pilih\\s*menu|select.*option|menu\\s*[:>]|^[\\s]*1\\.\\s*qr\\s*code)',
   },
 };

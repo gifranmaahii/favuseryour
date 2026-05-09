@@ -213,17 +213,44 @@ function connectedRegexFor(number) {
 
 async function requestPairingCode(chatId, number) {
   await hub.ensureConnected();
-  await hub.sendCommand(`pair ${number}`);
-  const { match: m, line } = await hub.waitFor(pairRegexFor(number), config.wa.pairTimeoutMs);
-  const code = m[1].replace(/\s/g, '').toUpperCase();
-  await bot.sendMessage(
-    chatId,
-    `🔑 *Pairing Code* untuk \`${number}\`:\n\n      \`${code}\`\n\n` +
-    `Buka WA → *Linked Devices* → *Link with phone number* → masukkan kode di atas.\n\n` +
-    `_Console:_ \`${escapeMd(line.slice(0, 200))}\``,
-    { parse_mode: 'Markdown' }
-  );
-  return code;
+
+  // Auto-respond ke prompt menu / prompt nomor selama proses pairing
+  const menuRe = new RegExp(config.wa.promptMenuRegex, 'i');
+  const numRe = new RegExp(config.wa.promptNumberRegex, 'i');
+  let lastSentAt = 0;
+  const sendOnce = async (cmd, key) => {
+    const now = Date.now();
+    if (now - lastSentAt < 800) return; // anti-double
+    lastSentAt = now;
+    console.log(`[pair] auto-respond (${key}): ${cmd}`);
+    try { await hub.sendCommand(cmd); } catch (_) {}
+  };
+  const off = hub.onLine((line) => {
+    if (menuRe.test(line)) sendOnce('2', 'menu');
+    if (numRe.test(line)) sendOnce(number, 'number');
+  });
+
+  try {
+    // Kirim sequence command awal (multi-line via '\n')
+    const seq = config.wa.pairCommand.replace(/\{number\}/g, number).split('\n');
+    for (const c of seq) {
+      if (c.trim()) await hub.sendCommand(c);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    const { match: m, line } = await hub.waitFor(pairRegexFor(number), config.wa.pairTimeoutMs);
+    const code = m[1].replace(/\s/g, '').toUpperCase();
+    await bot.sendMessage(
+      chatId,
+      `🔑 *Pairing Code* untuk \`${number}\`:\n\n      \`${code}\`\n\n` +
+      `Buka WA → *Linked Devices* → *Link with phone number* → masukkan kode di atas.\n\n` +
+      `_Console:_ \`${escapeMd(line.slice(0, 200))}\``,
+      { parse_mode: 'Markdown' }
+    );
+    return code;
+  } finally {
+    off();
+  }
 }
 
 // ----- PAIR -----
