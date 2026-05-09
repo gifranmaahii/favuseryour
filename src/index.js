@@ -238,16 +238,23 @@ async function requestPairingCode(chatId, number) {
       await new Promise((r) => setTimeout(r, 400));
     }
 
-    const { match: m, line } = await hub.waitFor(pairRegexFor(number), config.wa.pairTimeoutMs);
-    const code = m[1].replace(/\s/g, '').toUpperCase();
+    // freshOnly: hanya match baris baru setelah command dikirim, bukan kode lama dari buffer
+    const { match: m, line } = await hub.waitFor(pairRegexFor(number), config.wa.pairTimeoutMs, { freshOnly: true });
+    const codeRaw = m[1].replace(/\s/g, '').toUpperCase();
+    const codePlain = codeRaw.replace(/-/g, '');
+    const codeDashed = codePlain.length === 8 ? `${codePlain.slice(0, 4)}-${codePlain.slice(4)}` : codeRaw;
+    const ctx = hub.getRecent(8).join('\n');
     await bot.sendMessage(
       chatId,
-      `🔑 *Pairing Code* untuk \`${number}\`:\n\n      \`${code}\`\n\n` +
-      `Buka WA → *Linked Devices* → *Link with phone number* → masukkan kode di atas.\n\n` +
-      `_Console:_ \`${escapeMd(line.slice(0, 200))}\``,
+      `🔑 *Pairing Code* untuk \`${number}\`:\n\n` +
+      `      Format dash: \`${codeDashed}\`\n` +
+      `      Tanpa dash : \`${codePlain}\`\n\n` +
+      `Buka WA → *Linked Devices* → *Link with phone number* → masukkan salah satu format di atas.\n` +
+      `_⏰ Kode WA expired ±60 detik. Segera input!_\n\n` +
+      `_Console (8 baris terakhir):_\n\`\`\`\n${ctx.slice(-1500)}\n\`\`\``,
       { parse_mode: 'Markdown' }
     );
-    return code;
+    return codeDashed;
   } finally {
     off();
   }

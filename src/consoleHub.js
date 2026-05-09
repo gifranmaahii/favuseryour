@@ -99,12 +99,15 @@ class ConsoleHub {
    * Wait until a console line matches `regex`, or timeout.
    * Resolves with { match, line }.
    */
-  waitFor(regex, timeoutMs = 30000) {
+  waitFor(regex, timeoutMs = 30000, opts = {}) {
+    const { freshOnly = false } = opts;
     return new Promise((resolve, reject) => {
-      // Check existing buffer first
-      for (let i = this.buffer.length - 1; i >= 0; i--) {
-        const m = this.buffer[i].line.match(regex);
-        if (m) return resolve({ match: m, line: this.buffer[i].line });
+      if (!freshOnly) {
+        // Check existing buffer first (mode default)
+        for (let i = this.buffer.length - 1; i >= 0; i--) {
+          const m = this.buffer[i].line.match(regex);
+          if (m) return resolve({ match: m, line: this.buffer[i].line });
+        }
       }
       const timeoutId = setTimeout(() => {
         this.waiters = this.waiters.filter((w) => w.timeoutId !== timeoutId);
