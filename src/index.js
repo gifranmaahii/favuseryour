@@ -126,6 +126,7 @@ bot.onText(/^\/help(?:@\w+)?$/, guard(async (msg) => {
 🔑 *Login & Pairing*
 /pair <nomor> — minta kode pairing WhatsApp
 /logout — hapus session WhatsApp & restart
+/logout <nomor> — logout + auto-pair nomor setelah bot running
 
 👥 *Manajemen Bot Anak (Sewa)*
 /addbot <nomor> <nama> <hari> <owner>
@@ -211,35 +212,71 @@ function connectedRegexFor(number) {
   return new RegExp(tpl, 'i');
 }
 
-async function requestPairingCode(chatId, number) {
+async function requestPairingCode(chatId, number, opts = {}) {
   await hub.ensureConnected();
 
-  // Auto-respond ke prompt menu / prompt nomor selama proses pairing
   const menuRe = new RegExp(config.wa.promptMenuRegex, 'i');
   const numRe = new RegExp(config.wa.promptNumberRegex, 'i');
-  let lastSentAt = 0;
-  const sendOnce = async (cmd, key) => {
-    const now = Date.now();
-    if (now - lastSentAt < 800) return; // anti-double
-    lastSentAt = now;
-    console.log(`[pair] auto-respond (${key}): ${cmd}`);
-    try { await hub.sendCommand(cmd); } catch (_) {}
-  };
-  const off = hub.onLine((line) => {
-    if (menuRe.test(line)) sendOnce('2', 'menu');
-    if (numRe.test(line)) sendOnce(number, 'number');
+
+  // State machine: 'await_menu' -> 'menu_picked' -> 'number_sent' -> 'done'
+  // Mencegah false trigger saat menu cetak teks "(Masukkan nomor HP)" sebelum user pilih opsi.
+  let state = 'await_menu';
+
+  const log = (msg) => console.log(`[pair ${number}] ${msg}`);
+
+  const off = hub.onLine(async (line) => {
+    if (state === 'done') return;
+    if (state === 'await_menu' && menuRe.test(line)) {
+      state = 'menu_picked';
+      log(`menu detected -> sending "${config.wa.pairMenuChoice}"`);
+      try { await hub.sendCommand(config.wa.pairMenuChoice); } catch (_) {}
+      return;
+    }
+    if (state === 'menu_picked' && numRe.test(line)) {
+      state = 'number_sent';
+      log(`number prompt detected -> sending number`);
+      try { await hub.sendCommand(number); } catch (_) {}
+      return;
+    }
   });
 
   try {
-    // Kirim sequence command awal (multi-line via '\n')
-    const seq = config.wa.pairCommand.replace(/\{number\}/g, number).split('\n');
-    for (const c of seq) {
-      if (c.trim()) await hub.sendCommand(c);
-      await new Promise((r) => setTimeout(r, 400));
+    // Kalau pairCommand di-set (manual), kirim itu juga (mis. legacy bot yg pakai "pair <nomor>")
+    if (config.wa.pairCommand && config.wa.pairCommand.trim()) {
+      const seq = config.wa.pairCommand.replace(/\{number\}/g, number).split('\n');
+      for (const c of seq) {
+        if (c.trim()) await hub.sendCommand(c);
+        await new Promise((r) => setTimeout(r, 400));
+      }
     }
+    // Kalau bot SUDAH di state menu (mungkin baru restart & menunggu), kirim choice setelah delay
+    // sebagai fallback jika kita melewatkan event menu (bot tidak print prompt setelah konek WS).
+    const menuFallback = setTimeout(async () => {
+      if (state === 'await_menu') {
+        log('fallback: send menu choice (no prompt detected)');
+        try { await hub.sendCommand(config.wa.pairMenuChoice); state = 'menu_picked'; } catch (_) {}
+      }
+    }, 5000);
+    // Setelah menu picked, kalau bot tidak juga prompt nomor, kirim nomor sebagai fallback (sekali)
+    let numberFallbackFired = false;
+    const numberFallback = setInterval(async () => {
+      if (state === 'menu_picked' && !numberFallbackFired) {
+        numberFallbackFired = true;
+        log('fallback: send number (no number prompt detected)');
+        try { await hub.sendCommand(number); state = 'number_sent'; } catch (_) {}
+      }
+    }, 8000);
 
-    // freshOnly: hanya match baris baru setelah command dikirim, bukan kode lama dari buffer
-    const { match: m, line } = await hub.waitFor(pairRegexFor(number), config.wa.pairTimeoutMs, { freshOnly: true });
+    let m, line;
+    try {
+      // freshOnly: hanya match baris BARU setelah command dikirim
+      const res = await hub.waitFor(pairRegexFor(number), config.wa.pairTimeoutMs, { freshOnly: true });
+      m = res.match; line = res.line;
+    } finally {
+      clearTimeout(menuFallback);
+      clearInterval(numberFallback);
+    }
+    state = 'done';
     const codeRaw = m[1].replace(/\s/g, '').toUpperCase();
     const codePlain = codeRaw.replace(/-/g, '');
     const codeDashed = codePlain.length === 8 ? `${codePlain.slice(0, 4)}-${codePlain.slice(4)}` : codeRaw;
@@ -273,21 +310,57 @@ bot.onText(/^\/pair(?:@\w+)?\s+(\S+)\s*$/, guard(async (msg, match) => {
 }));
 
 // ----- LOGOUT -----
-bot.onText(/^\/logout(?:@\w+)?$/, guard(async (msg) => {
-  await bot.sendMessage(msg.chat.id, '🚪 Logout: menghapus folder session...');
-  // Try delete via files API
+async function doLogout(chatId) {
+  await bot.sendMessage(chatId, '🚪 Logout: menghapus folder session...');
   const sessionDir = config.paths.sessionDir.replace(/^\/+|\/+$/g, '');
   try {
-    // Resolve parent
     const parent = '/' + sessionDir.split('/').slice(0, -1).join('/');
     const name = sessionDir.split('/').pop();
     await pter.deleteFiles(parent || '/', [name]);
   } catch (e) {
-    await bot.sendMessage(msg.chat.id, `⚠️ Gagal hapus via API: ${e.message}\nMencoba via console...`);
-    await hub.sendCommand(`rm -rf ${config.paths.sessionDir}`);
+    await bot.sendMessage(chatId, `⚠️ Gagal hapus via API: ${e.message}\nMencoba via console...`);
+    try { await hub.sendCommand(`rm -rf ${config.paths.sessionDir}`); } catch (_) {}
   }
   await pter.sendPower('restart');
-  await bot.sendMessage(msg.chat.id, '✅ Session dihapus & bot direstart. Silakan /pair untuk login ulang.');
+}
+
+async function waitRunning(chatId, timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const r = await pter.getResources();
+      if (r.current_state === 'running') return true;
+    } catch (_) {}
+    await new Promise((res) => setTimeout(res, 4000));
+  }
+  return false;
+}
+
+bot.onText(/^\/logout(?:@\w+)?(?:\s+(\S+))?$/, guard(async (msg, match) => {
+  const nomor = match[1] ? match[1].replace(/\D/g, '') : null;
+
+  await doLogout(msg.chat.id);
+
+  if (!nomor) {
+    return bot.sendMessage(msg.chat.id,
+      '✅ Session dihapus & bot direstart.\n\n' +
+      'Untuk login ulang sekaligus, gunakan: `/logout <nomor>` atau `/pair <nomor>`.',
+      { parse_mode: 'Markdown' });
+  }
+
+  await bot.sendMessage(msg.chat.id, '⏳ Menunggu bot kembali running untuk pairing...');
+  const ok = await waitRunning(msg.chat.id);
+  if (!ok) {
+    return bot.sendMessage(msg.chat.id, '⚠️ Bot tidak kunjung running. Coba /pair ' + nomor + ' manual.');
+  }
+  // beri waktu bot WA untuk print menu
+  await new Promise((r) => setTimeout(r, 4000));
+  await bot.sendMessage(msg.chat.id, `📱 Memulai pairing untuk \`${nomor}\`...`, { parse_mode: 'Markdown' });
+  try {
+    await requestPairingCode(msg.chat.id, nomor);
+  } catch (e) {
+    await bot.sendMessage(msg.chat.id, `⚠️ Pairing gagal: ${e.message}\nCek /logs.`);
+  }
 }));
 
 // ----- ADDBOT -----
