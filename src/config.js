@@ -58,7 +58,7 @@ module.exports = {
     // Prompt dari bot yang minta input NOMOR (bukan menu item). Harus diakhiri
     // ":" atau ">" supaya tidak match teks "(Masukkan nomor HP)" di menu.
     promptNumberRegex: process.env.WA_PROMPT_NUMBER_REGEX
-      || '(masukkan\\s*nomor.*[:>]\\s*$|input.*number.*[:>]\\s*$|enter.*number.*[:>]\\s*$|nomor\\s*hp.*[:>]\\s*$|phone\\s*number.*[:>]\\s*$)',
+      || '(^\\s*>\\s*$|masukkan\\s*nomor.*[:>]\\s*$|input.*number.*[:>]\\s*$|enter.*number.*[:>]\\s*$|nomor\\s*hp.*[:>]\\s*$|phone\\s*number.*[:>]\\s*$)',
     // Prompt menu utama: bila match, otomatis kirim "2".
     promptMenuRegex: process.env.WA_PROMPT_MENU_REGEX
       || '(pilih\\s*metode\\s*login|pilih\\s*menu|select.*option|\\(1\\/2\\)|^[\\s]*\\d+\\.\\s*pairing\\s*code)',

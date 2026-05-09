@@ -220,7 +220,8 @@ async function requestPairingCode(chatId, number, opts = {}) {
 
   // State machine: 'await_menu' -> 'menu_picked' -> 'number_sent' -> 'done'
   // Mencegah false trigger saat menu cetak teks "(Masukkan nomor HP)" sebelum user pilih opsi.
-  let state = 'await_menu';
+  // skipMenu=true dipakai oleh /addbot karena bot Rey langsung minta nomor (tanpa menu).
+  let state = opts.skipMenu ? 'menu_picked' : 'await_menu';
 
   const log = (msg) => console.log(`[pair ${number}] ${msg}`);
 
@@ -421,7 +422,8 @@ bot.onText(/^\/addbot(?:@\w+)?\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$/, guard(async (ms
   // Stage 1: pairing code
   let code;
   try {
-    code = await requestPairingCode(msg.chat.id, number);
+    // Bot Rey: command `addbot` langsung minta nomor di prompt `>` — tanpa menu pilih metode.
+    code = await requestPairingCode(msg.chat.id, number, { skipMenu: true });
   } catch (e) {
     return bot.sendMessage(msg.chat.id,
       `❌ Gagal mendapatkan pairing code (timeout ${config.wa.pairTimeoutMs / 1000}s).\n` +
