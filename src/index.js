@@ -224,7 +224,7 @@ async function requestPairingCode(chatId, number, opts = {}) {
 
   const log = (msg) => console.log(`[pair ${number}] ${msg}`);
 
-  const off = hub.onLine(async (line) => {
+  const tryAdvance = async (line) => {
     if (state === 'done') return;
     if (state === 'await_menu' && menuRe.test(line)) {
       state = 'menu_picked';
@@ -236,9 +236,14 @@ async function requestPairingCode(chatId, number, opts = {}) {
       state = 'number_sent';
       log(`number prompt detected -> sending number`);
       try { await hub.sendCommand(number); } catch (_) {}
-      return;
     }
-  });
+  };
+
+  // Scan buffer existing dulu (mungkin menu sudah tercetak sebelum kita listen)
+  const recent = hub.getRecent(50);
+  for (const ln of recent) await tryAdvance(ln);
+
+  const off = hub.onLine((line) => { tryAdvance(line); });
 
   try {
     // Kalau pairCommand di-set (manual), kirim itu juga (mis. legacy bot yg pakai "pair <nomor>")
@@ -324,14 +329,24 @@ async function doLogout(chatId) {
   await pter.sendPower('restart');
 }
 
-async function waitRunning(chatId, timeoutMs = 90000) {
+async function waitRunning(chatId, timeoutMs = 180000) {
   const deadline = Date.now() + timeoutMs;
+  let lastState = null;
+  let progressMsgAt = 0;
   while (Date.now() < deadline) {
     try {
       const r = await pter.getResources();
       if (r.current_state === 'running') return true;
+      if (r.current_state !== lastState) {
+        lastState = r.current_state;
+      }
+      // Kirim progress tiap 30s supaya user tahu masih jalan
+      if (Date.now() - progressMsgAt > 30000) {
+        progressMsgAt = Date.now();
+        try { await bot.sendMessage(chatId, `⏳ Masih menunggu (panel: \`${lastState}\`)...`, { parse_mode: 'Markdown' }); } catch (_) {}
+      }
     } catch (_) {}
-    await new Promise((res) => setTimeout(res, 4000));
+    await new Promise((res) => setTimeout(res, 3000));
   }
   return false;
 }
