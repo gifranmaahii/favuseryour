@@ -282,17 +282,20 @@ async function requestPairingCode(chatId, number, opts = {}) {
       clearInterval(numberFallback);
     }
     state = 'done';
-    const codeRaw = m[1].replace(/\s/g, '').toUpperCase();
+    // Preserve case asli — WA terima case-insensitive tapi tampilkan apa adanya.
+    const codeRaw = m[1].replace(/\s/g, '');
     const codePlain = codeRaw.replace(/-/g, '');
     const codeDashed = codePlain.length === 8 ? `${codePlain.slice(0, 4)}-${codePlain.slice(4)}` : codeRaw;
     const ctx = hub.getRecent(8).join('\n');
     await bot.sendMessage(
       chatId,
       `🔑 *Pairing Code* untuk \`${number}\`:\n\n` +
-      `      Format dash: \`${codeDashed}\`\n` +
-      `      Tanpa dash : \`${codePlain}\`\n\n` +
-      `Buka WA → *Linked Devices* → *Link with phone number* → masukkan salah satu format di atas.\n` +
+      `      Persis dari panel : \`${codeRaw}\`\n` +
+      `      Format dash       : \`${codeDashed}\`\n` +
+      `      Tanpa dash        : \`${codePlain}\`\n\n` +
+      `Buka WA → *Linked Devices* → *Link with phone number* → masukkan kode di atas (coba salah satu format).\n` +
       `_⏰ Kode WA expired ±60 detik. Segera input!_\n\n` +
+      `_Baris match:_ \`${escapeMd(line.slice(0, 200))}\`\n\n` +
       `_Console (8 baris terakhir):_\n\`\`\`\n${ctx.slice(-1500)}\n\`\`\``,
       { parse_mode: 'Markdown' }
     );

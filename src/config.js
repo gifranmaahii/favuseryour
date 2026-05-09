@@ -41,10 +41,11 @@ module.exports = {
   },
   wa: {
     // Regex untuk menangkap pairing code di console (group 1 = code, 8 char alnum)
-    // Default: harus mengandung digit (skip kata seperti MASUKKAN/PAIRING/NOMOR).
-    // Format yg di-match: XXXX-XXXX atau XXXXXXXX (8 char) yg memuat ≥1 angka.
+    // Default: WAJIB ada kata kunci "pairing code" / "kode pairing" SEBELUM kode,
+    // supaya tidak salah tangkap session ID / hash 8-char acak.
+    // Format yg di-match: XXXX-XXXX atau XXXXXXXX (8 char alnum, ≥1 digit & ≥1 huruf).
     pairRegex: process.env.WA_PAIR_REGEX
-      || '((?:[A-Z0-9]{4}-[A-Z0-9]{4})|(?=[A-Z0-9]*\\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{8})',
+      || '(?:pairing\\s*code|kode\\s*pairing|pair\\s*code|your\\s*code)[^A-Za-z0-9]*((?:[A-Za-z0-9]{4}-[A-Za-z0-9]{4})|(?=[A-Za-z0-9]*\\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{8})',
     // Regex untuk mendeteksi bot SUKSES konek (boleh sertakan placeholder {number})
     connectedRegex: process.env.WA_CONNECTED_REGEX
       || '(connected|logged\\s*in|tersambung|online|ready|berhasil\\s*login|open)',
