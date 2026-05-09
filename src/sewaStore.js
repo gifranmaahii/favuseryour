@@ -22,24 +22,41 @@ function remainingDays(expMs) {
   return `${d} hari ${h} jam`;
 }
 
+function isMissingFileError(e) {
+  if (!e || !e.response) return false;
+  const s = e.response.status;
+  if (s === 404) return true;
+  // Pterodactyl kadang return 500 DaemonConnectionException untuk file yg belum ada
+  // atau saat server offline. Kita treat sebagai "file kosong" agar bot tetap jalan.
+  if (s === 500) {
+    const data = e.response.data;
+    const text = typeof data === 'string' ? data : JSON.stringify(data || {});
+    return /DaemonConnection|not.?found|no such file|ENOENT/i.test(text);
+  }
+  return false;
+}
+
 async function load() {
   try {
     const raw = await pter.readFile(FILE);
     if (!raw || !raw.trim()) return {};
     return JSON.parse(raw);
   } catch (e) {
-    if (e.response && e.response.status === 404) {
-      // not yet created
-      return {};
-    }
-    // try to be tolerant
+    if (isMissingFileError(e)) return {};
     if (e.message && /JSON/.test(e.message)) return {};
-    throw e;
+    // Tolerant fallback: log saja, kembalikan kosong agar bot tidak crash.
+    console.warn('[sewaStore] load() warning:', e.message);
+    return {};
   }
 }
 
 async function save(data) {
-  await pter.writeFile(FILE, JSON.stringify(data, null, 2));
+  try {
+    await pter.writeFile(FILE, JSON.stringify(data, null, 2));
+  } catch (e) {
+    const detail = e.response && e.response.data ? JSON.stringify(e.response.data).slice(0, 300) : e.message;
+    throw new Error(`Gagal menyimpan ${FILE}: ${detail}. Pastikan server panel ON & path benar.`);
+  }
 }
 
 async function addBot({ number, name, days, owner }) {
