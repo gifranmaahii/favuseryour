@@ -45,7 +45,7 @@ module.exports = {
     // supaya tidak salah tangkap session ID / hash 8-char acak.
     // Format yg di-match: XXXX-XXXX atau XXXXXXXX (8 char alnum, ≥1 digit & ≥1 huruf).
     pairRegex: process.env.WA_PAIR_REGEX
-      || '(?:pairing\\s*code|kode\\s*pairing|pair\\s*code|your\\s*code)[^A-Za-z0-9]*((?:[A-Za-z0-9]{4}-[A-Za-z0-9]{4})|(?=[A-Za-z0-9]*\\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{8})',
+      || '(?=.*(?:pairing[\\s_]*code|kode[\\s_]*pairing|pair[\\s_]*code|your[\\s_]*code)).*?((?:[A-Za-z0-9]{4}-[A-Za-z0-9]{4})|(?=[A-Za-z0-9]*\\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{8})',
     // Regex untuk mendeteksi bot SUKSES konek (boleh sertakan placeholder {number})
     connectedRegex: process.env.WA_CONNECTED_REGEX
       || '(connected|logged\\s*in|tersambung|online|ready|berhasil\\s*login|open)',
