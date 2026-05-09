@@ -195,29 +195,39 @@ bot.onText(/^\/update(?:@\w+)?$/, guard(async (msg) => {
   await bot.sendMessage(msg.chat.id, '✅ Update + restart terkirim.');
 }));
 
+// ----- PAIR helpers -----
+function pairRegexFor(number) {
+  return new RegExp(config.wa.pairRegex, 'i');
+}
+function connectedRegexFor(number) {
+  const tpl = config.wa.connectedRegex.replace(/\{number\}/g, number);
+  return new RegExp(tpl, 'i');
+}
+
+async function requestPairingCode(chatId, number) {
+  await hub.ensureConnected();
+  await hub.sendCommand(`pair ${number}`);
+  const { match: m, line } = await hub.waitFor(pairRegexFor(number), config.wa.pairTimeoutMs);
+  const code = m[1].replace(/\s/g, '').toUpperCase();
+  await bot.sendMessage(
+    chatId,
+    `🔑 *Pairing Code* untuk \`${number}\`:\n\n      \`${code}\`\n\n` +
+    `Buka WA → *Linked Devices* → *Link with phone number* → masukkan kode di atas.\n\n` +
+    `_Console:_ \`${escapeMd(line.slice(0, 200))}\``,
+    { parse_mode: 'Markdown' }
+  );
+  return code;
+}
+
 // ----- PAIR -----
 bot.onText(/^\/pair(?:@\w+)?\s+(\S+)\s*$/, guard(async (msg, match) => {
-  let nomor = match[1].replace(/\D/g, '');
+  const nomor = match[1].replace(/\D/g, '');
   if (!nomor) return bot.sendMessage(msg.chat.id, '❌ Nomor tidak valid.');
   await bot.sendMessage(msg.chat.id, `📱 Meminta pairing code untuk \`${nomor}\`...`, { parse_mode: 'Markdown' });
-
-  // Make sure console connected so we can capture
-  await hub.ensureConnected();
-
-  // Send pair command to bot's console; bot must support `pair <nomor>`
-  await hub.sendCommand(`pair ${nomor}`);
-
-  // Wait for a line containing the pairing code (8 chars alnum, often with dash)
   try {
-    const { match: m, line } = await hub.waitFor(/(?:pair(?:ing)?\s*code|kode\s*pairing)[^A-Z0-9]*([A-Z0-9]{4}[-\s]?[A-Z0-9]{4})/i, 45000);
-    const code = m[1].replace(/\s/g, '').toUpperCase();
-    await bot.sendMessage(
-      msg.chat.id,
-      `🔑 *Pairing Code:* \`${code}\`\n\nBuka WA → Linked Devices → Link with phone number → masukkan kode di atas.\n\n_Baris asli:_ \`${escapeMd(line.slice(0, 200))}\``,
-      { parse_mode: 'Markdown' }
-    );
+    await requestPairingCode(msg.chat.id, nomor);
   } catch (e) {
-    await bot.sendMessage(msg.chat.id, '⚠️ Timeout. Tidak menemukan pairing code di console. Coba /logs untuk cek manual.');
+    await bot.sendMessage(msg.chat.id, `⚠️ Timeout / gagal: ${e.message}\nCek /logs.`);
   }
 }));
 
@@ -248,17 +258,81 @@ bot.onText(/^\/addbot(?:@\w+)?\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$/, guard(async (ms
   if (!number || !name || !days) {
     return bot.sendMessage(msg.chat.id, '❌ Format: /addbot <nomor> <nama> <hari> <owner>');
   }
-  const rec = await sewa.addBot({ number, name, days, owner });
-  await hub.ensureConnected();
-  // Notify the WA bot so it can spawn the child (jika WA bot mendukung)
-  hub.sendCommand(`addbot ${number} ${name} ${days} ${owner}`).catch(() => {});
+
+  // Cek bot WA harus running dulu
+  try {
+    const r = await pter.getResources();
+    if (r.current_state !== 'running') {
+      return bot.sendMessage(msg.chat.id,
+        `⚠️ Bot WA sedang *${r.current_state}*. Nyalakan dulu dengan /startbot, tunggu sampai 🟢 running, lalu coba lagi.`,
+        { parse_mode: 'Markdown' });
+    }
+  } catch (_) {}
+
+  // Cegah duplikat sebelum lakukan apapun
+  const existing = await sewa.load();
+  if (existing[number]) {
+    return bot.sendMessage(msg.chat.id, `⚠️ Bot dengan nomor \`${number}\` sudah terdaftar.`, { parse_mode: 'Markdown' });
+  }
 
   await bot.sendMessage(msg.chat.id,
-`✅ *Bot anak ditambahkan*
+    `🟡 Menambahkan bot anak \`${number}\` (${escapeMd(name)})...\n` +
+    `1️⃣ Mengirim perintah ke panel\n2️⃣ Meminta pairing code\n3️⃣ Menunggu bot konek`,
+    { parse_mode: 'Markdown' });
+
+  await hub.ensureConnected();
+  // Trigger spawn di WA bot (kalau supported). Lalu pair.
+  hub.sendCommand(`addbot ${number} ${name} ${days} ${owner}`).catch(() => {});
+
+  // Stage 1: pairing code
+  let code;
+  try {
+    code = await requestPairingCode(msg.chat.id, number);
+  } catch (e) {
+    return bot.sendMessage(msg.chat.id,
+      `❌ Gagal mendapatkan pairing code (timeout ${config.wa.pairTimeoutMs / 1000}s).\n` +
+      `Bot anak *belum* tersimpan. Cek /logs untuk error.\n` +
+      `Pastikan WA bot mendukung perintah \`pair <nomor>\` di console.`,
+      { parse_mode: 'Markdown' });
+  }
+
+  // Stage 2: tunggu sampai konek
+  await bot.sendMessage(msg.chat.id,
+    `⌛ Menunggu bot \`${number}\` selesai login (max ${config.wa.connectTimeoutMs / 1000}s)...\n` +
+    `Masukkan kode \`${code}\` di WhatsApp Anda sekarang.`,
+    { parse_mode: 'Markdown' });
+
+  let connectedLine = null;
+  try {
+    const res = await hub.waitFor(connectedRegexFor(number), config.wa.connectTimeoutMs);
+    connectedLine = res.line;
+  } catch (e) {
+    return bot.sendMessage(msg.chat.id,
+      `⚠️ Pairing code sudah dikirim, tetapi bot \`${number}\` belum terdeteksi konek dalam ${config.wa.connectTimeoutMs / 1000}s.\n\n` +
+      `Bot anak *belum disimpan* sebagai aktif. Kalau Anda yakin sudah konek, jalankan ulang /addbot atau tambah manual setelah cek /logs.`,
+      { parse_mode: 'Markdown' });
+  }
+
+  // Stage 3: simpan ke sewa.json
+  let rec;
+  try {
+    rec = await sewa.addBot({ number, name, days, owner });
+    // tandai status active
+    const all = await sewa.load();
+    if (all[number]) { all[number].status = 'active'; await sewa.save(all); }
+  } catch (e) {
+    return bot.sendMessage(msg.chat.id,
+      `⚠️ Bot konek tetapi gagal menyimpan sewa: ${e.message}`);
+  }
+
+  await bot.sendMessage(msg.chat.id,
+`✅ *Bot anak ditambahkan & aktif*
 Nomor: \`${number}\`
 Nama: \`${name}\`
 Owner: \`${owner}\`
-Sewa: ${days} hari (sampai ${sewa.fmtDate(rec.expiredAt)})`,
+Sewa: ${days} hari (sampai ${sewa.fmtDate(rec.expiredAt)})
+
+_Connect log:_ \`${escapeMd(String(connectedLine).slice(0, 150))}\``,
     { parse_mode: 'Markdown' });
 }));
 

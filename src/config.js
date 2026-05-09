@@ -39,4 +39,14 @@ module.exports = {
       .map((s) => s.trim())
       .filter(Boolean),
   },
+  wa: {
+    // Regex untuk menangkap pairing code di console (group 1 = code, 8 char alnum)
+    pairRegex: process.env.WA_PAIR_REGEX
+      || '(?:pair(?:ing)?\\s*code|kode\\s*pairing)[^A-Z0-9]*([A-Z0-9]{4}[-\\s]?[A-Z0-9]{4})',
+    // Regex untuk mendeteksi bot SUKSES konek (boleh sertakan placeholder {number})
+    connectedRegex: process.env.WA_CONNECTED_REGEX
+      || '(connected|logged\\s*in|tersambung|online|ready|berhasil\\s*login|open)',
+    pairTimeoutMs: Number(process.env.WA_PAIR_TIMEOUT_MS || 60000),
+    connectTimeoutMs: Number(process.env.WA_CONNECT_TIMEOUT_MS || 120000),
+  },
 };
