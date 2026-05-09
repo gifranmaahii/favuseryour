@@ -1,0 +1,25 @@
+// Contoh ecosystem.config.js untuk Bot Rey (wangsapch)
+// Copy file ini ke repo wangsapch Anda, rename jadi ecosystem.config.js
+// Lalu ubah Startup Command panel jadi: npx pm2-runtime ecosystem.config.js
+
+module.exports = {
+  apps: [
+    {
+      name: 'main',
+      script: './index.js',
+      args: '--session=session',
+      instances: 1,
+      exec_mode: 'fork',
+      watch: false,
+      max_memory_restart: '512M',
+      env: { NODE_ENV: 'production' },
+      // Auto restart kalau crash
+      autorestart: true,
+      // Jangan restart kalau crash terlalu sering
+      max_restarts: 5,
+      min_uptime: '10s'
+    }
+    // Bot anak akan di-spawn otomatis via pm2 start dari botManager.js
+    // Tidak perlu didefinisikan di sini
+  ]
+};

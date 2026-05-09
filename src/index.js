@@ -124,15 +124,17 @@ bot.onText(/^\/help(?:@\w+)?$/, guard(async (msg) => {
 /usage — pemakaian CPU/RAM/Disk
 
 🔑 *Login & Pairing*
-/pair <nomor> — minta kode pairing WhatsApp
+/pair <nomor> — minta kode pairing WhatsApp (main bot)
 /logout — hapus session WhatsApp & restart
 /logout <nomor> — logout + auto-pair nomor setelah bot running
 
 👥 *Manajemen Bot Anak (Sewa)*
-/addbot <nomor> <nama> <hari> <owner>
+/addbot <nomor> <nama> <hari> <owner> — tambah bot anak via PM2
 /listbots — daftar bot anak + sisa sewa
-/delbot <nomor|nama> — hapus bot anak
+/delbot <nomor|nama> — hapus bot anak via PM2
 /pruneexpired — bersihkan bot anak yang expired
+
+⚠️ *Catatan PM2*: Bot Rey pakai PM2 untuk multi-bot.\nPastikan panel pakai startup command: npx pm2-runtime ecosystem.config.js
 
 📋 *Konsol & Log*
 /logs [n] — n baris terakhir (default 30)
@@ -306,6 +308,45 @@ async function requestPairingCode(chatId, number, opts = {}) {
   }
 }
 
+// Fungsi untuk menangkap pairing code dari PM2 logs (child bot)
+// BotManager print: "[bot_<nomor>] KODE PAIRING: XXXX-XXXX"
+async function requestPairingCodeFromPM2(chatId, number, name) {
+  await hub.ensureConnected();
+  
+  const botName = `bot_${number}`;
+  const pm2LogRe = new RegExp(
+    `\\[${botName}\\].*?(?:pairing[\\s_]*code|kode[\\s_]*pairing).*?((?:[A-Za-z0-9]{4}-[A-Za-z0-9]{4})|(?=[A-Za-z0-9]*\\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{8})`,
+    'i'
+  );
+  
+  // Juga tangkap format langsung dari botManager
+  const directRe = new RegExp(
+    `(?:pairing[\\s_]*code|kode[\\s_]*pairing).*?((?:[A-Za-z0-9]{4}-[A-Za-z0-9]{4})|(?=[A-Za-z0-9]*\\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{8})`,
+    'i'
+  );
+  
+  const combinedRe = new RegExp(
+    `(?:\\[${botName}\\])?.*?(?:pairing[\\s_]*code|kode[\\s_]*pairing).*?((?:[A-Za-z0-9]{4}-[A-Za-z0-9]{4})|(?=[A-Za-z0-9]*\\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{8})`,
+    'i'
+  );
+  
+  const { match: m, line } = await hub.waitFor(combinedRe, config.wa.pairTimeoutMs, { freshOnly: true });
+  const codeRaw = m[1].replace(/\s/g, '');
+  const codePlain = codeRaw.replace(/-/g, '');
+  const codeDashed = codePlain.length === 8 ? `${codePlain.slice(0, 4)}-${codePlain.slice(4)}` : codeRaw;
+  
+  await bot.sendMessage(
+    chatId,
+    `🔑 *Pairing Code* untuk bot anak \`${number}\` (${escapeMd(name)}):\n\n` +
+    `      Format dash: \`${codeDashed}\`\n` +
+    `      Tanpa dash : \`${codePlain}\`\n\n` +
+    `Masukkan kode di WhatsApp → Linked Devices → Link with phone number.`,
+    { parse_mode: 'Markdown' }
+  );
+  
+  return codeDashed;
+}
+
 // ----- PAIR -----
 bot.onText(/^\/pair(?:@\w+)?\s+(\S+)\s*$/, guard(async (msg, match) => {
   const nomor = match[1].replace(/\D/g, '');
@@ -416,20 +457,27 @@ bot.onText(/^\/addbot(?:@\w+)?\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$/, guard(async (ms
     { parse_mode: 'Markdown' });
 
   await hub.ensureConnected();
-  // Trigger spawn di WA bot (kalau supported). Lalu pair.
-  hub.sendCommand(`addbot ${number} ${name} ${days} ${owner}`).catch(() => {});
 
-  // Stage 1: pairing code
+  // Bot Rey pakai PM2 untuk spawn child bot.
+  // Format command: add_bot <phone> <name> <days> <owner>
+  // Bot Rey akan spawn PM2 process baru dan print pairing code ke PM2 logs.
+  const cmd = `add_bot ${number} ${name} ${days} ${owner}`;
+  await bot.sendMessage(msg.chat.id, `📤 Mengirim command: \`${cmd}\``, { parse_mode: 'Markdown' });
+  hub.sendCommand(cmd).catch(() => {});
+
+  // Tunggu sebentar supaya PM2 sempat spawn process
+  await new Promise(r => setTimeout(r, 3000));
+
+  // Stage 1: pairing code dari PM2 logs (bukan console langsung)
+  // Bot Rey print kode ke PM2 logs, kita perlu tangkap dari situ
   let code;
   try {
-    // Bot Rey: command `addbot` langsung minta nomor di prompt `>` — tanpa menu pilih metode.
-    code = await requestPairingCode(msg.chat.id, number, { skipMenu: true });
+    code = await requestPairingCodeFromPM2(msg.chat.id, number, name);
   } catch (e) {
     return bot.sendMessage(msg.chat.id,
-      `❌ Gagal mendapatkan pairing code (timeout ${config.wa.pairTimeoutMs / 1000}s).\n` +
-      `Bot anak *belum* tersimpan. Cek /logs untuk error.\n` +
-      `Pastikan WA bot mendukung perintah \`pair <nomor>\` di console.`,
-      { parse_mode: 'Markdown' });
+      `❌ Gagal mendapatkan pairing code.\n` +
+      `Kemungkinan: 1) PM2 belum jalan di panel, 2) Bot Rey tidak support command add_bot.\n` +
+      `Cek /logs dan pastikan panel pakai startup command: \`npx pm2-runtime ecosystem.config.js\``, { parse_mode: 'Markdown' });
   }
 
   // Stage 2: tunggu sampai konek
@@ -492,7 +540,7 @@ bot.onText(/^\/listbots(?:@\w+)?$/, guard(async (msg) => {
 bot.onText(/^\/delbot(?:@\w+)?\s+(.+)$/, guard(async (msg, match) => {
   const q = match[1].trim();
   const removed = await sewa.delBot(q);
-  hub.sendCommand(`delbot ${removed.number}`).catch(() => {});
+  hub.sendCommand(`delete_bot ${removed.number}`).catch(() => {});
   await bot.sendMessage(msg.chat.id, `🗑️ Bot anak \`${removed.number}\` (${escapeMd(removed.name || '-')}) dihapus.`, { parse_mode: 'Markdown' });
 }));
 
@@ -505,7 +553,7 @@ bot.onText(/^\/pruneexpired(?:@\w+)?$/, guard(async (msg) => {
   const expired = await sewa.pruneExpired();
   if (!expired.length) return bot.sendMessage(msg.chat.id, '✅ Tidak ada bot expired.');
   for (const b of expired) {
-    hub.sendCommand(`delbot ${b.number}`).catch(() => {});
+    hub.sendCommand(`delete_bot ${b.number}`).catch(() => {});
   }
   await bot.sendMessage(msg.chat.id,
     `🧹 ${expired.length} bot expired dihapus:\n` +
@@ -633,7 +681,7 @@ function startExpiryCron() {
       }
       const expired = await sewa.pruneExpired();
       for (const b of expired) {
-        hub.sendCommand(`delbot ${b.number}`).catch(() => {});
+        hub.sendCommand(`delete_bot ${b.number}`).catch(() => {});
         for (const id of notifyTargets()) {
           bot.sendMessage(id,
             `⛔ Sewa \`${b.number}\` (${b.name}) *expired* — otomatis dihapus & logout.`,
