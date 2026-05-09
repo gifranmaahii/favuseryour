@@ -5,24 +5,33 @@ const config = require('./config');
 const pter = require('./pterodactyl');
 const hub = require('./consoleHub');
 const sewa = require('./sewaStore');
+const chats = require('./chatStore');
+
+function notifyTargets() {
+  // Jika admin diset, kirim hanya ke admin. Jika tidak, kirim ke semua chat yang pernah berinteraksi.
+  if (config.telegram.adminIds.length) return config.telegram.adminIds;
+  return chats.all();
+}
 
 const bot = new TelegramBot(config.telegram.token, { polling: true });
 
 // =================== AUTH ===================
 function isAdmin(userId) {
-  if (!config.telegram.adminIds.length) return false;
+  // Public mode: jika TELEGRAM_ADMIN_IDS kosong, semua user diizinkan.
+  if (!config.telegram.adminIds.length) return true;
   return config.telegram.adminIds.includes(Number(userId));
 }
 
 function guard(handler) {
   return async (msg, ...rest) => {
     const uid = msg.from && msg.from.id;
+    if (msg.chat && msg.chat.id) chats.add(msg.chat.id);
     if (!isAdmin(uid)) {
       try {
         await bot.sendMessage(
           msg.chat.id,
           `⛔ *Akses ditolak.*\n\nID Telegram Anda: \`${uid}\`\n` +
-          `Tambahkan ID ini ke variabel \`TELEGRAM_ADMIN_IDS\` di \`.env\` lalu restart bot.`,
+          `Hubungi pemilik bot untuk ditambahkan, atau kosongkan \`TELEGRAM_ADMIN_IDS\` di \`.env\` agar publik.`,
           { parse_mode: 'Markdown' }
         );
       } catch (_) {}
@@ -75,9 +84,13 @@ async function sendLong(chatId, text, opts = {}) {
 
 bot.onText(/^\/start(?:@\w+)?$/, async (msg) => {
   const uid = msg.from.id;
-  const adminLine = isAdmin(uid)
-    ? '✅ Anda terdaftar sebagai *admin*.'
-    : `⚠️ Anda *belum* admin. ID Anda: \`${uid}\`. Tambahkan ke .env lalu restart.`;
+  if (msg.chat && msg.chat.id) chats.add(msg.chat.id);
+  const publik = !config.telegram.adminIds.length;
+  const adminLine = publik
+    ? '🌐 Mode *publik* aktif — semua user boleh pakai bot ini.'
+    : (isAdmin(uid)
+        ? '✅ Anda terdaftar sebagai *admin*.'
+        : `⚠️ Anda *belum* admin. ID Anda: \`${uid}\`. Tambahkan ke .env lalu restart.`);
 
   const text =
 `👋 *Favuser Panel Bot*
@@ -372,7 +385,7 @@ function setupAutoNotify() {
     if (now - lastNotifyAt < 5000) return; // anti-spam
     lastNotifyAt = now;
     const trimmed = line.slice(0, 400);
-    for (const id of config.telegram.adminIds) {
+    for (const id of notifyTargets()) {
       bot.sendMessage(id, `🚨 *Console alert:*\n\`\`\`\n${trimmed}\n\`\`\``, { parse_mode: 'Markdown' })
         .catch(() => {});
     }
@@ -381,7 +394,7 @@ function setupAutoNotify() {
   hub.onState((state) => {
     if (!notifyEnabled) return;
     const emoji = STATE_EMOJI[state] || '⚪';
-    for (const id of config.telegram.adminIds) {
+    for (const id of notifyTargets()) {
       bot.sendMessage(id, `${emoji} Status server berubah: *${state}*`, { parse_mode: 'Markdown' })
         .catch(() => {});
     }
@@ -401,7 +414,7 @@ function startExpiryCron() {
         if (left > 0 && left < 24 * 60 * 60 * 1000 && !b.warnedExpiry) {
           const all = await sewa.load();
           if (all[b.number]) { all[b.number].warnedExpiry = true; await sewa.save(all); }
-          for (const id of config.telegram.adminIds) {
+          for (const id of notifyTargets()) {
             bot.sendMessage(id,
               `⚠️ Bot anak \`${b.number}\` (${b.name}) akan expired < 24 jam.`,
               { parse_mode: 'Markdown' }).catch(() => {});
@@ -411,7 +424,7 @@ function startExpiryCron() {
       const expired = await sewa.pruneExpired();
       for (const b of expired) {
         hub.sendCommand(`delbot ${b.number}`).catch(() => {});
-        for (const id of config.telegram.adminIds) {
+        for (const id of notifyTargets()) {
           bot.sendMessage(id,
             `⛔ Sewa \`${b.number}\` (${b.name}) *expired* — otomatis dihapus & logout.`,
             { parse_mode: 'Markdown' }).catch(() => {});
@@ -429,7 +442,7 @@ function startExpiryCron() {
 (async () => {
   console.log('[boot] Starting Favuser Panel Bot...');
   if (!config.telegram.adminIds.length) {
-    console.warn('[boot] ⚠️ TELEGRAM_ADMIN_IDS belum diisi. Bot akan menolak semua command sampai diisi.');
+    console.log('[boot] 🌐 Mode publik aktif (TELEGRAM_ADMIN_IDS kosong) — semua user diizinkan.');
   } else {
     console.log('[boot] Admin IDs:', config.telegram.adminIds.join(', '));
   }
@@ -442,8 +455,8 @@ function startExpiryCron() {
     console.warn('[boot] console connect failed (akan retry):', e.message);
   });
 
-  // Notify admins when bot online
-  for (const id of config.telegram.adminIds) {
+  // Notify (admin atau semua chat yang pernah pakai bot) saat online
+  for (const id of notifyTargets()) {
     bot.sendMessage(id, '🤖 Favuser Panel Bot online. Ketik /help.').catch(() => {});
   }
 
