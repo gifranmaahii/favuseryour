@@ -266,13 +266,28 @@ bot.onText(/^\/addbot(?:@\w+)?\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+)$/, guard(async (ms
     return bot.sendMessage(msg.chat.id, '❌ Format: /addbot <nomor> <nama> <hari> <owner>');
   }
 
-  // Cek bot WA harus running dulu
+  // Cek bot WA harus running. Kalau starting → tunggu, kalau offline/stopping → block.
   try {
-    const r = await pter.getResources();
-    if (r.current_state !== 'running') {
+    let r = await pter.getResources();
+    if (r.current_state === 'offline' || r.current_state === 'stopping') {
       return bot.sendMessage(msg.chat.id,
-        `⚠️ Bot WA sedang *${r.current_state}*. Nyalakan dulu dengan /startbot, tunggu sampai 🟢 running, lalu coba lagi.`,
+        `⚠️ Bot WA sedang *${r.current_state}*. Jalankan /startbot dulu lalu coba lagi.`,
         { parse_mode: 'Markdown' });
+    }
+    if (r.current_state === 'starting') {
+      await bot.sendMessage(msg.chat.id, '⏳ Panel masih *starting*, menunggu sampai 🟢 running...', { parse_mode: 'Markdown' });
+      const deadline = Date.now() + 90000;
+      while (Date.now() < deadline) {
+        await new Promise((res) => setTimeout(res, 4000));
+        try { r = await pter.getResources(); } catch (_) {}
+        if (r.current_state === 'running') break;
+        if (r.current_state === 'offline') {
+          return bot.sendMessage(msg.chat.id, '❌ Panel berubah jadi *offline*. Coba /startbot lagi.', { parse_mode: 'Markdown' });
+        }
+      }
+      if (r.current_state !== 'running') {
+        await bot.sendMessage(msg.chat.id, `⚠️ Panel masih \`${r.current_state}\` setelah 90s — lanjut tetap mencoba addbot.`, { parse_mode: 'Markdown' });
+      }
     }
   } catch (_) {}
 
