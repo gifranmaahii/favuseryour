@@ -6,6 +6,9 @@ const config = require('./config');
 
 const { baseUrl, apiKey, serverId } = config.pterodactyl;
 
+const TIMEOUT_MS = Number(process.env.PTERODACTYL_TIMEOUT_MS || 60000);
+const MAX_RETRIES = Number(process.env.PTERODACTYL_RETRIES || 2);
+
 const http = axios.create({
   baseURL: `${baseUrl}/api/client`,
   headers: {
@@ -13,8 +16,29 @@ const http = axios.create({
     Accept: 'application/json',
     'Content-Type': 'application/json',
   },
-  timeout: 20000,
+  timeout: TIMEOUT_MS,
 });
+
+// Auto-retry untuk timeout / network error / 5xx (kecuali 4xx auth/validation)
+http.interceptors.response.use(
+  (r) => r,
+  async (err) => {
+    const cfg = err.config || {};
+    cfg.__retryCount = cfg.__retryCount || 0;
+    const status = err.response && err.response.status;
+    const isTimeout = err.code === 'ECONNABORTED' || /timeout/i.test(err.message || '');
+    const isNetwork = !err.response && (err.code === 'ECONNRESET' || err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN' || isTimeout);
+    const is5xx = status && status >= 500 && status < 600;
+    if ((isNetwork || is5xx) && cfg.__retryCount < MAX_RETRIES) {
+      cfg.__retryCount += 1;
+      const delay = 1500 * cfg.__retryCount;
+      console.warn(`[pter] retry ${cfg.__retryCount}/${MAX_RETRIES} after ${delay}ms (${err.code || status}) ${cfg.method?.toUpperCase()} ${cfg.url}`);
+      await new Promise((r) => setTimeout(r, delay));
+      return http.request(cfg);
+    }
+    return Promise.reject(err);
+  }
+);
 
 // ===== Server power & info =====
 async function getResources() {

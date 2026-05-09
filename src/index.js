@@ -40,12 +40,19 @@ function guard(handler) {
     try {
       await handler(msg, ...rest);
     } catch (e) {
-      console.error('[handler error]', e);
-      const detail = e.response && e.response.data
-        ? JSON.stringify(e.response.data).slice(0, 500)
-        : (e.message || String(e));
+      console.error('[handler error]', e.message || e);
+      let detail;
+      if (e.code === 'ECONNABORTED' || /timeout/i.test(e.message || '')) {
+        detail = '⏱️ Panel timeout / lambat merespons. Coba lagi sebentar.';
+      } else if (e.response && e.response.data) {
+        const d = e.response.data;
+        const errs = d.errors && d.errors[0];
+        detail = errs ? `${errs.code || ''} ${errs.detail || ''}`.trim() : JSON.stringify(d).slice(0, 400);
+      } else {
+        detail = e.message || String(e);
+      }
       try {
-        await bot.sendMessage(msg.chat.id, `❌ Error: \`${detail}\``, { parse_mode: 'Markdown' });
+        await bot.sendMessage(msg.chat.id, `❌ ${detail}`);
       } catch (_) {}
     }
   };
